@@ -1,0 +1,70 @@
+@using EmailMaker.Services
+@inject ImageStore Store
+
+<div class="uploader @(_dragOver ? "drag-over" : "") @(_busy ? "busy" : "")">
+    <InputFile OnChange="OnFileSelected" accept="@ImageStore.AcceptAttribute"
+               @ondragenter="() => _dragOver = true" @ondragleave="() => _dragOver = false" @ondrop="() => _dragOver = false" />
+    @if (!string.IsNullOrEmpty(ImageId))
+    {
+        <img src="@($"{ImageStore.RequestPath}/{ImageId}")" alt="" />
+        <span class="uploader-hint">@(_busy ? "Uploading…" : "Click or drop to replace")</span>
+    }
+    else
+    {
+        <span class="uploader-icon">⬆</span>
+        <span class="uploader-hint">@(_busy ? "Uploading…" : "Click or drop an image")</span>
+        <span class="uploader-sub">PNG, JPG, GIF or WebP · max 10 MB</span>
+    }
+</div>
+@if (!string.IsNullOrEmpty(ImageId))
+{
+    <button type="button" class="link-btn danger" @onclick="Remove">Remove image</button>
+}
+@if (_error is not null)
+{
+    <p class="error">@_error</p>
+}
+
+@code {
+    [Parameter] public string? ImageId { get; set; }
+    /// <summary>Raised with the new image id (or null when removed) and the original file name.</summary>
+    [Parameter] public EventCallback<(string? Id, string? FileName)> OnChanged { get; set; }
+
+    private bool _busy, _dragOver;
+    private string? _error;
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _dragOver = false;
+        var file = e.File;
+        if (!ImageStore.IsAllowed(file.ContentType))
+        {
+            _error = "Unsupported file type. Use PNG, JPG, GIF or WebP.";
+            return;
+        }
+        if (file.Size > ImageStore.MaxFileSize)
+        {
+            _error = "That image is larger than 10 MB.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await using var stream = file.OpenReadStream(ImageStore.MaxFileSize);
+            var id = await Store.SaveAsync(stream, file.ContentType);
+            await OnChanged.InvokeAsync((id, file.Name));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task Remove() => OnChanged.InvokeAsync((null, null));
+}

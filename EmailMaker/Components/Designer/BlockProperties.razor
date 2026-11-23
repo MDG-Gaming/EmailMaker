@@ -1,0 +1,302 @@
+@using EmailMaker.Models
+
+<div class="panel-section">
+    @switch (Block)
+    {
+        case HeadingBlock h:
+            <label class="field">
+                <span>Text</span>
+                <textarea rows="2" @bind="h.Text" @bind:event="oninput" @bind:after="Changed"></textarea>
+            </label>
+            <div class="field-row">
+                <label class="field">
+                    <span>Level</span>
+                    <select @bind="h.Level" @bind:after="Changed">
+                        <option value="1">H1</option>
+                        <option value="2">H2</option>
+                        <option value="3">H3</option>
+                    </select>
+                </label>
+                <label class="field">
+                    <span>Font size</span>
+                    <input type="number" min="10" max="72" @bind="h.FontSize" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+            </div>
+            <ColorInput Label="Color" @bind-Value="h.Color" @bind-Value:after="Changed" />
+            <label class="check"><input type="checkbox" @bind="h.Bold" @bind:after="Changed" /> Bold</label>
+            <AlignPicker @bind-Value="h.Align" @bind-Value:after="Changed" />
+            break;
+
+        case TextBlock t:
+            <label class="field">
+                <span>Text</span>
+                <textarea rows="7" @bind="t.Text" @bind:event="oninput" @bind:after="Changed"></textarea>
+                <small class="hint">**bold**, *italic*, [label](https://url). Blank line = new paragraph.</small>
+            </label>
+            <div class="field-row">
+                <label class="field">
+                    <span>Font size</span>
+                    <input type="number" min="8" max="48" @bind="t.FontSize" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+                <label class="field">
+                    <span>Line height</span>
+                    <input type="number" min="1" max="3" step="0.1" @bind="t.LineHeight" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+            </div>
+            <ColorInput Label="Text color" @bind-Value="t.Color" @bind-Value:after="Changed" />
+            <ColorInput Label="Link color" @bind-Value="t.LinkColor" @bind-Value:after="Changed" />
+            <AlignPicker @bind-Value="t.Align" @bind-Value:after="Changed" />
+            break;
+
+        case ImageBlock img:
+            <div class="field">
+                <span>Image</span>
+                <ImageUploader ImageId="@img.ImageId" OnChanged="r => SetImage(img, r)" />
+            </div>
+            @if (string.IsNullOrEmpty(img.ImageId))
+            {
+                <label class="field">
+                    <span>…or image URL</span>
+                    <input type="url" placeholder="https://" @bind="img.ExternalUrl" @bind:after="Changed" />
+                </label>
+            }
+            <label class="field">
+                <span>Alt text</span>
+                <input type="text" @bind="img.AltText" @bind:event="oninput" @bind:after="Changed" />
+            </label>
+            <label class="field">
+                <span>Link (optional)</span>
+                <input type="url" placeholder="https://" @bind="img.LinkUrl" @bind:after="Changed" />
+            </label>
+            <label class="field">
+                <span>Width — @img.WidthPercent%</span>
+                <input type="range" min="10" max="100" step="5" @bind="img.WidthPercent" @bind:event="oninput" @bind:after="Changed" />
+            </label>
+            <label class="field">
+                <span>Corner radius</span>
+                <input type="number" min="0" max="200" @bind="img.BorderRadius" @bind:event="oninput" @bind:after="Changed" />
+            </label>
+            <AlignPicker @bind-Value="img.Align" @bind-Value:after="Changed" />
+            break;
+
+        case ButtonBlock btn:
+            <label class="field">
+                <span>Label</span>
+                <input type="text" @bind="btn.Text" @bind:event="oninput" @bind:after="Changed" />
+            </label>
+            <label class="field">
+                <span>Link</span>
+                <input type="url" placeholder="https://" @bind="btn.Url" @bind:after="Changed" />
+            </label>
+            <ColorInput Label="Button color" @bind-Value="btn.BackgroundColorButton" @bind-Value:after="Changed" />
+            <ColorInput Label="Text color" @bind-Value="btn.TextColor" @bind-Value:after="Changed" />
+            <div class="field-row">
+                <label class="field">
+                    <span>Font size</span>
+                    <input type="number" min="10" max="36" @bind="btn.FontSize" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+                <label class="field">
+                    <span>Radius</span>
+                    <input type="number" min="0" max="50" @bind="btn.BorderRadius" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+            </div>
+            <div class="field-row">
+                <label class="field">
+                    <span>Pad Y</span>
+                    <input type="number" min="0" max="60" @bind="btn.PaddingVertical" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+                <label class="field">
+                    <span>Pad X</span>
+                    <input type="number" min="0" max="120" @bind="btn.PaddingHorizontal" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+            </div>
+            <label class="check"><input type="checkbox" @bind="btn.FullWidth" @bind:after="Changed" /> Full width</label>
+            @if (!btn.FullWidth)
+            {
+                <AlignPicker @bind-Value="btn.Align" @bind-Value:after="Changed" />
+            }
+            break;
+
+        case DividerBlock d:
+            <ColorInput Label="Color" @bind-Value="d.Color" @bind-Value:after="Changed" />
+            <div class="field-row">
+                <label class="field">
+                    <span>Thickness</span>
+                    <input type="number" min="1" max="20" @bind="d.Thickness" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+                <label class="field">
+                    <span>Width %</span>
+                    <input type="number" min="5" max="100" @bind="d.WidthPercent" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+            </div>
+            break;
+
+        case SpacerBlock s:
+            <label class="field">
+                <span>Height — @s.Height px</span>
+                <input type="range" min="4" max="200" step="4" @bind="s.Height" @bind:event="oninput" @bind:after="Changed" />
+            </label>
+            break;
+
+        case ImageTextBlock it:
+            <div class="field">
+                <span>Image</span>
+                <ImageUploader ImageId="@it.ImageId" OnChanged="r => SetImage(it, r)" />
+            </div>
+            @if (string.IsNullOrEmpty(it.ImageId))
+            {
+                <label class="field">
+                    <span>…or image URL</span>
+                    <input type="url" placeholder="https://" @bind="it.ExternalUrl" @bind:after="Changed" />
+                </label>
+            }
+            <label class="field">
+                <span>Alt text</span>
+                <input type="text" @bind="it.AltText" @bind:event="oninput" @bind:after="Changed" />
+            </label>
+            <label class="check"><input type="checkbox" @bind="it.ImageOnRight" @bind:after="Changed" /> Image on the right</label>
+            <label class="field">
+                <span>Title</span>
+                <input type="text" @bind="it.Title" @bind:event="oninput" @bind:after="Changed" />
+            </label>
+            <label class="field">
+                <span>Text</span>
+                <textarea rows="5" @bind="it.Text" @bind:event="oninput" @bind:after="Changed"></textarea>
+                <small class="hint">**bold**, *italic*, [label](https://url)</small>
+            </label>
+            <label class="field">
+                <span>Font size</span>
+                <input type="number" min="10" max="30" @bind="it.FontSize" @bind:event="oninput" @bind:after="Changed" />
+            </label>
+            <ColorInput Label="Title color" @bind-Value="it.TitleColor" @bind-Value:after="Changed" />
+            <ColorInput Label="Text color" @bind-Value="it.Color" @bind-Value:after="Changed" />
+            <ColorInput Label="Link color" @bind-Value="it.LinkColor" @bind-Value:after="Changed" />
+            break;
+
+        case ColumnsBlock row:
+            <div class="field">
+                <span>Layout</span>
+                <div class="layout-presets">
+                    @foreach (var (name, widths) in ColumnsBlock.Presets)
+                    {
+                        <button type="button" title="@name" class="layout-preset @(row.MatchesPreset(widths) ? "active" : "")"
+                                @onclick="() => ApplyLayout(row, widths)">
+                            @foreach (var w in widths)
+                            {
+                                <i style="flex:@w 1 0"></i>
+                            }
+                        </button>
+                    }
+                </div>
+            </div>
+            <div class="field-row">
+                <label class="field">
+                    <span>Gap (px)</span>
+                    <input type="number" min="0" max="80" @bind="row.Gap" @bind:event="oninput" @bind:after="Changed" />
+                </label>
+                <label class="field">
+                    <span>Vertical align</span>
+                    <select @bind="row.VerticalAlign" @bind:after="Changed">
+                        <option value="@VerticalAlign.Top">Top</option>
+                        <option value="@VerticalAlign.Middle">Middle</option>
+                        <option value="@VerticalAlign.Bottom">Bottom</option>
+                    </select>
+                </label>
+            </div>
+            <label class="check"><input type="checkbox" @bind="row.StackOnMobile" @bind:after="Changed" /> Stack columns on mobile</label>
+
+            <div class="field">
+                <span>Columns</span>
+                @for (var i = 0; i < row.Columns.Count; i++)
+                {
+                    var col = row.Columns[i];
+                    var number = i + 1;
+                    <div class="column-card @(col.Id == SelectedColumnId ? "active" : "")">
+                        <div class="column-card-head">
+                            <strong>Column @number</strong>
+                            <span class="hint">@col.Blocks.Count block@(col.Blocks.Count == 1 ? "" : "s")</span>
+                        </div>
+                        <div class="field-row">
+                            <label class="field">
+                                <span>Width share</span>
+                                <input type="number" min="5" max="100" @bind="col.WidthPercent" @bind:event="oninput" @bind:after="Changed" />
+                            </label>
+                            <div></div>
+                        </div>
+                        <ColorInput Label="Background" AllowEmpty="true" @bind-Value="col.BackgroundColor" @bind-Value:after="Changed" />
+                    </div>
+                }
+                <div class="column-actions">
+                    <button type="button" class="btn ghost" disabled="@(row.Columns.Count >= ColumnsBlock.MaxColumns)" @onclick="() => AddColumn(row)">+ Add column</button>
+                    <button type="button" class="btn ghost" disabled="@(row.Columns.Count <= ColumnsBlock.MinColumns)" @onclick="() => RemoveColumn(row)">− Remove last</button>
+                </div>
+                <small class="hint">Removing a column moves its blocks into the one before it. Select a column in the email, then click a block on the left to add it there.</small>
+            </div>
+            break;
+
+        case HtmlBlock html:
+            <label class="field">
+                <span>HTML</span>
+                <textarea rows="12" class="mono" spellcheck="false" @bind="html.Html" @bind:event="oninput" @bind:after="Changed"></textarea>
+                <small class="hint">Inserted as-is. Use inline styles — many clients ignore &lt;style&gt; tags.</small>
+            </label>
+            break;
+    }
+</div>
+
+<div class="panel-section">
+    <h4>Spacing &amp; background</h4>
+    <ColorInput Label="Row background" AllowEmpty="true" @bind-Value="Block.BackgroundColor" @bind-Value:after="Changed" />
+    <div class="field-row four">
+        <label class="field"><span>Top</span><input type="number" min="0" max="200" @bind="Block.PaddingTop" @bind:event="oninput" @bind:after="Changed" /></label>
+        <label class="field"><span>Right</span><input type="number" min="0" max="200" @bind="Block.PaddingRight" @bind:event="oninput" @bind:after="Changed" /></label>
+        <label class="field"><span>Bottom</span><input type="number" min="0" max="200" @bind="Block.PaddingBottom" @bind:event="oninput" @bind:after="Changed" /></label>
+        <label class="field"><span>Left</span><input type="number" min="0" max="200" @bind="Block.PaddingLeft" @bind:event="oninput" @bind:after="Changed" /></label>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public EmailBlock Block { get; set; } = default!;
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    /// <summary>Highlights the column that is currently targeted on the canvas.</summary>
+    [Parameter] public Guid? SelectedColumnId { get; set; }
+
+    private Task Changed() => OnChanged.InvokeAsync();
+
+    private Task ApplyLayout(ColumnsBlock row, int[] widths)
+    {
+        row.ApplyLayout(widths);
+        return Changed();
+    }
+
+    private Task AddColumn(ColumnsBlock row)
+    {
+        var n = row.Columns.Count + 1;
+        row.ApplyLayout(Enumerable.Repeat(100 / n, n).ToArray());
+        return Changed();
+    }
+
+    private Task RemoveColumn(ColumnsBlock row)
+    {
+        var n = row.Columns.Count - 1;
+        row.ApplyLayout(Enumerable.Repeat(100 / n, n).ToArray());
+        return Changed();
+    }
+
+    private Task SetImage(ImageBlock img, (string? Id, string? FileName) r)
+    {
+        img.ImageId = r.Id;
+        if (r.FileName is not null && string.IsNullOrWhiteSpace(img.AltText))
+            img.AltText = Path.GetFileNameWithoutExtension(r.FileName).Replace('-', ' ').Replace('_', ' ');
+        return Changed();
+    }
+
+    private Task SetImage(ImageTextBlock it, (string? Id, string? FileName) r)
+    {
+        it.ImageId = r.Id;
+        if (r.FileName is not null && string.IsNullOrWhiteSpace(it.AltText))
+            it.AltText = Path.GetFileNameWithoutExtension(r.FileName).Replace('-', ' ').Replace('_', ' ');
+        return Changed();
+    }
+}

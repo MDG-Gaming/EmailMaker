@@ -1,0 +1,34 @@
+@* Color swatch + hex text box bound to the same value. Empty value allowed when AllowEmpty. *@
+<label class="field">
+    <span>@Label</span>
+    <div class="color-row">
+        <input type="color" value="@SwatchValue" @oninput="OnSwatch" />
+        <input type="text" value="@Value" placeholder="@(AllowEmpty ? "none" : "")" @onchange="OnText" spellcheck="false" />
+        @if (AllowEmpty && !string.IsNullOrEmpty(Value))
+        {
+            <button type="button" class="icon-btn" title="Clear" @onclick="() => Set(string.Empty)">✕</button>
+        }
+    </div>
+</label>
+
+@code {
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public bool AllowEmpty { get; set; }
+
+    // <input type=color> only understands #rrggbb.
+    private string SwatchValue =>
+        Value is { Length: 7 } v && v[0] == '#' ? v :
+        Value is { Length: 4 } s && s[0] == '#' ? $"#{s[1]}{s[1]}{s[2]}{s[2]}{s[3]}{s[3]}" :
+        "#ffffff";
+
+    private Task OnSwatch(ChangeEventArgs e) => Set(e.Value?.ToString() ?? "");
+    private Task OnText(ChangeEventArgs e) => Set(e.Value?.ToString()?.Trim() ?? "");
+
+    private async Task Set(string value)
+    {
+        Value = value;
+        await ValueChanged.InvokeAsync(value);
+    }
+}

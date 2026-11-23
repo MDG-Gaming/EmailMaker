@@ -1,0 +1,25 @@
+@using EmailMaker.Models
+<div class="field">
+    <span>@Label</span>
+    <div class="segmented">
+        @foreach (var (align, text) in Options)
+        {
+            <button type="button" class="@(Value == align ? "active" : "")" @onclick="() => Set(align)">@text</button>
+        }
+    </div>
+</div>
+
+@code {
+    private static readonly (HorizontalAlign, string)[] Options =
+        [(HorizontalAlign.Left, "Left"), (HorizontalAlign.Center, "Center"), (HorizontalAlign.Right, "Right")];
+
+    [Parameter] public string Label { get; set; } = "Alignment";
+    [Parameter] public HorizontalAlign Value { get; set; }
+    [Parameter] public EventCallback<HorizontalAlign> ValueChanged { get; set; }
+
+    private async Task Set(HorizontalAlign value)
+    {
+        Value = value;
+        await ValueChanged.InvokeAsync(value);
+    }
+}

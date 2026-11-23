@@ -1,0 +1,743 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Text.Json
+@using EmailMaker.Models
+@using EmailMaker.Services
+@using EmailMaker.Components.Designer
+@using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage
+@inject EmailHtmlRenderer Renderer
+@inject EmailExporter Exporter
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject ProtectedLocalStorage LocalStore
+
+<PageTitle>@Doc.Title · Email Maker</PageTitle>
+
+<div class="app">
+    <header class="topbar">
+        <div class="brand">✉ Email Maker</div>
+        <input class="title-input" @bind="Doc.Title" @bind:event="oninput" @bind:after="Commit" aria-label="Email title" />
+
+        <div class="topbar-actions">
+            <button class="btn ghost" title="Undo (Ctrl+Z)" disabled="@(!CanUndo)" @onclick="Undo">↶</button>
+            <button class="btn ghost" title="Redo (Ctrl+Y)" disabled="@(!CanRedo)" @onclick="Redo">↷</button>
+            <span class="sep"></span>
+            <button class="btn ghost" @onclick="NewDocument">New</button>
+            <label class="btn ghost file-btn">
+                Open design
+                <InputFile accept=".json,application/json" OnChange="LoadDesign" />
+            </label>
+            <button class="btn ghost" @onclick="SaveDesign">Save design</button>
+            <span class="sep"></span>
+            <button class="btn secondary" @onclick="OpenPreview">Preview</button>
+            <button class="btn primary" @onclick="() => _showExport = true">Export HTML</button>
+        </div>
+    </header>
+
+    @if (_toast is not null)
+    {
+        <div class="toast @(_toastIsError ? "error" : "")" @onclick="() => _toast = null">@_toast</div>
+    }
+
+    <aside class="sidebar left">
+        <h3>Blocks</h3>
+        <p class="hint">Click to add, or drag onto the email.</p>
+        <div class="palette">
+            @foreach (var item in Palette)
+            {
+                <button class="palette-item" draggable="true"
+                        @onclick="() => AddBlock(item.Factory())"
+                        @ondragstart="() => StartDragNew(item.Factory)"
+                        @ondragend="EndDrag">
+                    <span class="palette-icon">@item.Icon</span>
+                    <span>@item.Name</span>
+                </button>
+            }
+        </div>
+
+        <button class="btn ghost full settings-btn @(_selectedId is null ? "active" : "")" @onclick="() => Select(null)">
+            ⚙ Email settings
+        </button>
+    </aside>
+
+    <main class="canvas" style="background:@Doc.BodyBackground" @onclick="() => Select(null)">
+        <div class="email" style="width:@(Doc.ContentWidth)px; background:@Doc.ContentBackground; border-radius:@(Doc.ContentBorderRadius)px; font-family:@Doc.FontFamily">
+            @if (Doc.Blocks.Count == 0)
+            {
+                <div class="empty @(IsDropTarget(null, 0) ? "drop-target" : "")"
+                     @ondragover="() => DragOver(null, 0)" @ondragover:preventDefault
+                     @ondrop="() => Drop(null, 0)" @ondrop:preventDefault>
+                    <p><strong>Your email is empty.</strong></p>
+                    <p>Add blocks from the left to get started, or <button class="link-btn" @onclick="LoadSample" @onclick:stopPropagation>load a sample</button>.</p>
+                </div>
+            }
+            @for (var i = 0; i < Doc.Blocks.Count; i++)
+            {
+                @BlockItem(Doc.Blocks[i], i, null, Doc.Blocks.Count, EmailHtmlRenderer.ContentWidth(Doc))
+            }
+            @if (Doc.Blocks.Count > 0 && _dragging)
+            {
+                <div class="drop-end @(IsDropTarget(null, Doc.Blocks.Count) ? "drop-target" : "")"
+                     @ondragover="() => DragOver(null, Doc.Blocks.Count)" @ondragover:preventDefault
+                     @ondrop="() => Drop(null, Doc.Blocks.Count)" @ondrop:preventDefault>Drop here</div>
+            }
+        </div>
+    </main>
+
+    <aside class="sidebar right">
+        @if (SelectedLocation is { } loc)
+        {
+            var sel = loc.Block;
+            <div class="panel-header">
+                <div>
+                    @if (loc.Row is { } parentRow)
+                    {
+                        <button class="link-btn crumb" @onclick="() => SelectColumn(parentRow, loc.Column!)">
+                            ← Columns · column @(parentRow.Columns.IndexOf(loc.Column!) + 1)
+                        </button>
+                    }
+                    <h3>@sel.DisplayName</h3>
+                </div>
+                <button class="icon-btn" title="Close" @onclick="() => Select(null)">✕</button>
+            </div>
+            <BlockProperties @key="sel.Id" Block="sel" SelectedColumnId="_selectedColumnId" OnChanged="Commit" />
+        }
+        else
+        {
+            <div class="panel-header"><h3>Email settings</h3></div>
+            <div class="panel-section">
+                <label class="field">
+                    <span>Preheader</span>
+                    <input type="text" placeholder="Preview text shown in the inbox" @bind="Doc.Preheader" @bind:event="oninput" @bind:after="Commit" />
+                    <small class="hint">Hidden text most inboxes show after the subject line.</small>
+                </label>
+                <ColorInput Label="Page background" @bind-Value="Doc.BodyBackground" @bind-Value:after="Commit" />
+                <ColorInput Label="Content background" @bind-Value="Doc.ContentBackground" @bind-Value:after="Commit" />
+                <div class="field-row">
+                    <label class="field">
+                        <span>Content width</span>
+                        <input type="number" min="320" max="900" step="10" @bind="Doc.ContentWidth" @bind:after="Commit" />
+                    </label>
+                    <label class="field">
+                        <span>Corner radius</span>
+                        <input type="number" min="0" max="40" @bind="Doc.ContentBorderRadius" @bind:event="oninput" @bind:after="Commit" />
+                    </label>
+                </div>
+                <label class="field">
+                    <span>Font</span>
+                    <select @bind="Doc.FontFamily" @bind:after="Commit">
+                        @foreach (var f in Fonts)
+                        {
+                            <option value="@f.Value">@f.Name</option>
+                        }
+                    </select>
+                    <small class="hint">Email-safe fonts only — web fonts aren't supported by most clients.</small>
+                </label>
+            </div>
+            <div class="panel-section">
+                <h4>Tips</h4>
+                <ul class="tips">
+                    <li>Click a block in the email to edit it.</li>
+                    <li>Drag blocks to reorder them.</li>
+                    <li><kbd>Del</kbd> removes the selected block, <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes.</li>
+                    <li>Placeholders like <code>{verificationLink}</code> or <code>{{unsubscribe_url}}</code> work in links and text and are exported as-is.</li>
+                </ul>
+            </div>
+        }
+    </aside>
+</div>
+
+@if (_showPreview)
+{
+    <div class="modal-backdrop" @onclick="() => _showPreview = false">
+        <div class="modal preview-modal" @onclick:stopPropagation>
+            <div class="modal-header">
+                <h3>Preview</h3>
+                <div class="segmented">
+                    <button class="@(!_mobilePreview ? "active" : "")" @onclick="() => _mobilePreview = false">🖥 Desktop</button>
+                    <button class="@(_mobilePreview ? "active" : "")" @onclick="() => _mobilePreview = true">📱 Mobile</button>
+                </div>
+                <button class="icon-btn" @onclick="() => _showPreview = false">✕</button>
+            </div>
+            <div class="preview-stage">
+                <iframe class="@(_mobilePreview ? "mobile" : "")" srcdoc="@_previewHtml" title="Email preview" sandbox="allow-popups allow-popups-to-escape-sandbox"></iframe>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showExport)
+{
+    <div class="modal-backdrop" @onclick="() => _showExport = false">
+        <div class="modal export-modal" @onclick:stopPropagation>
+            <div class="modal-header">
+                <h3>Export HTML</h3>
+                <button class="icon-btn" @onclick="() => _showExport = false">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="hint">How should images be included?</p>
+                <label class="option @(_exportMode == ImageMode.Hosted ? "active" : "")">
+                    <input type="radio" name="mode" checked="@(_exportMode == ImageMode.Hosted)" @onchange="() => _exportMode = ImageMode.Hosted" />
+                    <div>
+                        <strong>Hosted image URLs</strong> <span class="badge">recommended for sending</span>
+                        <p>Images link to this server. Works in every inbox, as long as the URL below is publicly reachable.</p>
+                        @if (_exportMode == ImageMode.Hosted)
+                        {
+                            <input type="url" class="base-url" @bind="_baseUrl" placeholder="https://your-domain.com" />
+                        }
+                    </div>
+                </label>
+                <label class="option @(_exportMode == ImageMode.Zip ? "active" : "")">
+                    <input type="radio" name="mode" checked="@(_exportMode == ImageMode.Zip)" @onchange="() => _exportMode = ImageMode.Zip" />
+                    <div>
+                        <strong>ZIP with images folder</strong>
+                        <p><code>index.html</code> + <code>images/</code>. Upload to Mailchimp, Brevo, your own CDN, etc.</p>
+                    </div>
+                </label>
+                <label class="option @(_exportMode == ImageMode.Embedded ? "active" : "")">
+                    <input type="radio" name="mode" checked="@(_exportMode == ImageMode.Embedded)" @onchange="() => _exportMode = ImageMode.Embedded" />
+                    <div>
+                        <strong>Embed images (base64)</strong>
+                        <p>One self-contained file. Good for archiving or previews — but Gmail and Outlook.com block embedded images.</p>
+                    </div>
+                </label>
+            </div>
+            <div class="modal-footer">
+                @if (_exportMode != ImageMode.Zip)
+                {
+                    <button class="btn ghost" disabled="@_exporting" @onclick="CopyHtml">Copy HTML</button>
+                }
+                <button class="btn primary" disabled="@_exporting" @onclick="Export">
+                    @(_exporting ? "Exporting…" : _exportMode == ImageMode.Zip ? "Download .zip" : "Download .html")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private const string StorageKey = "emailmaker.design";
+
+    private sealed record PaletteItem(string Name, string Icon, Func<EmailBlock> Factory);
+
+    private static readonly PaletteItem[] Palette =
+    [
+        new("Heading", "H", () => new HeadingBlock()),
+        new("Text", "¶", () => new TextBlock()),
+        new("Image", "🖼", () => new ImageBlock()),
+        new("Button", "▭", () => new ButtonBlock()),
+        new("Columns", "▥", () => ColumnsBlock.Create(50, 50)),
+        new("Image + text", "◧", () => new ImageTextBlock()),
+        new("Divider", "—", () => new DividerBlock()),
+        new("Spacer", "↕", () => new SpacerBlock()),
+        new("Custom HTML", "</>", () => new HtmlBlock()),
+    ];
+
+    private static readonly (string Name, string Value)[] Fonts =
+    [
+        ("Arial / Helvetica", "Arial, Helvetica, sans-serif"),
+        ("Verdana", "Verdana, Geneva, sans-serif"),
+        ("Tahoma", "Tahoma, Geneva, sans-serif"),
+        ("Trebuchet MS", "'Trebuchet MS', Helvetica, sans-serif"),
+        ("Segoe UI / system", "'Segoe UI', Roboto, Helvetica, Arial, sans-serif"),
+        ("Georgia", "Georgia, 'Times New Roman', serif"),
+        ("Times New Roman", "'Times New Roman', Times, serif"),
+        ("Courier New", "'Courier New', Courier, monospace"),
+    ];
+
+    private EmailDocument Doc { get; set; } = EmailDocument.CreateSample();
+    private Guid? _selectedId;
+    /// <summary>Set when a column (not a block inside it) is selected; new blocks are added there.</summary>
+    private Guid? _selectedColumnId;
+    private EmailDocument.BlockLocation? SelectedLocation => Doc.Find(_selectedId);
+
+    // drag & drop. A drop position is (column id or null for the top level, index in that list).
+    private readonly record struct DropTarget(Guid? ColumnId, int Index);
+    private bool _dragging, _draggingIsRow;
+    private Guid? _draggingId;
+    private Func<EmailBlock>? _draggingNew;
+    private DropTarget? _dragOver;
+
+    // modals
+    private bool _showPreview, _mobilePreview, _showExport, _exporting;
+    private string _previewHtml = "";
+    private ImageMode _exportMode = ImageMode.Hosted;
+    private string _baseUrl = "";
+
+    // toast
+    private string? _toast;
+    private bool _toastIsError;
+    private CancellationTokenSource? _toastCts;
+
+    // undo / redo (JSON snapshots)
+    private readonly List<string> _history = [];
+    private int _historyIndex = -1;
+    private DateTime _lastCommit;
+    private string? _lastCoalesceKey; // which edit the last undo step belongs to
+    private bool CanUndo => _historyIndex > 0;
+    private bool CanRedo => _historyIndex < _history.Count - 1;
+
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<Home>? _selfRef;
+    private bool _loaded;
+
+    protected override void OnInitialized()
+    {
+        _baseUrl = Nav.BaseUri.TrimEnd('/');
+        PushHistory(coalesce: false);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/emailmaker.js");
+        _selfRef = DotNetObjectReference.Create(this);
+        await _module.InvokeVoidAsync("registerShortcuts", _selfRef);
+
+        // Restore the last design from this browser.
+        try
+        {
+            var saved = await LocalStore.GetAsync<string>(StorageKey);
+            if (saved is { Success: true, Value: { Length: > 0 } json })
+            {
+                Doc = JsonSerializer.Deserialize<EmailDocument>(json, EmailExporter.JsonOptions) ?? Doc;
+                _history.Clear();
+                _historyIndex = -1;
+                PushHistory(coalesce: false);
+            }
+        }
+        catch
+        {
+            // Corrupt or unreadable storage (e.g. key rotated) — just start fresh.
+        }
+        _loaded = true;
+        StateHasChanged();
+    }
+
+    // ---------------------------------------------------------------- canvas rendering
+
+    /// <summary>
+    /// One block on the canvas. Used for top-level blocks and (one level down) for blocks inside columns.
+    /// Events stop propagating so a block inside a column doesn't also trigger its parent row.
+    /// </summary>
+    private RenderFragment BlockItem(EmailBlock block, int index, Guid? columnId, int siblings, int width) => __builder =>
+    {
+        var classes = "block"
+            + (block.Id == _selectedId ? " selected" : "")
+            + (IsDropTarget(columnId, index) ? " drop-before" : "")
+            + (_draggingId == block.Id ? " dragging" : "")
+            + (block is ColumnsBlock ? " is-row" : "")
+            + (columnId is not null ? " in-column" : "");
+
+        <div @key="block.Id" class="@classes" draggable="true"
+             @onclick="() => Select(block.Id)" @onclick:stopPropagation
+             @ondragstart="() => StartDragExisting(block)" @ondragstart:stopPropagation
+             @ondragend="EndDrag" @ondragend:stopPropagation
+             @ondragover="() => DragOver(columnId, index)" @ondragover:preventDefault @ondragover:stopPropagation
+             @ondrop="() => Drop(columnId, index)" @ondrop:preventDefault @ondrop:stopPropagation>
+
+            @if (block is ColumnsBlock row)
+            {
+                var widths = EmailHtmlRenderer.ColumnWidths(row, width);
+                var align = row.VerticalAlign switch { VerticalAlign.Middle => "center", VerticalAlign.Bottom => "flex-end", _ => "flex-start" };
+                <div class="cols" style="padding:@(row.PaddingTop)px @(row.PaddingRight)px @(row.PaddingBottom)px @(row.PaddingLeft)px; gap:@(row.Gap)px; align-items:@align; @(string.IsNullOrEmpty(row.BackgroundColor) ? "" : $"background:{row.BackgroundColor};")">
+                    @for (var c = 0; c < row.Columns.Count; c++)
+                    {
+                        var col = row.Columns[c];
+                        var colWidth = widths[c];
+                        <div @key="col.Id"
+                             class="col @(col.Id == _selectedColumnId ? "selected" : "")"
+                             style="flex:@(Math.Max(1, col.WidthPercent)) 1 0; @(string.IsNullOrEmpty(col.BackgroundColor) ? "" : $"background:{col.BackgroundColor};")"
+                             @onclick="() => SelectColumn(row, col)" @onclick:stopPropagation
+                             @ondragover="() => DragOver(col.Id, col.Blocks.Count)" @ondragover:preventDefault @ondragover:stopPropagation
+                             @ondrop="() => Drop(col.Id, col.Blocks.Count)" @ondrop:preventDefault @ondrop:stopPropagation>
+                            @for (var j = 0; j < col.Blocks.Count; j++)
+                            {
+                                @BlockItem(col.Blocks[j], j, col.Id, col.Blocks.Count, colWidth)
+                            }
+                            @if (col.Blocks.Count == 0)
+                            {
+                                <div class="col-empty @(IsDropTarget(col.Id, 0) ? "drop-target" : "")">
+                                    @(col.Id == _selectedColumnId ? "Click a block on the left to add it here" : "Drop or add blocks here")
+                                </div>
+                            }
+                            else if (_dragging && !_draggingIsRow)
+                            {
+                                <div class="col-drop-end @(IsDropTarget(col.Id, col.Blocks.Count) ? "drop-target" : "")">Drop here</div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="block-content">@((MarkupString)Renderer.RenderBlockPreview(block, Doc, width))</div>
+            }
+
+            <div class="block-label">@block.DisplayName</div>
+            <div class="block-toolbar" @onclick:stopPropagation>
+                <button title="Move up" disabled="@(index == 0)" @onclick="() => Move(block.Id, -1)">↑</button>
+                <button title="Move down" disabled="@(index == siblings - 1)" @onclick="() => Move(block.Id, 1)">↓</button>
+                <button title="Duplicate" @onclick="() => Duplicate(block.Id)">⧉</button>
+                <button title="Delete" class="danger" @onclick="() => Delete(block.Id)">🗑</button>
+            </div>
+        </div>
+    };
+
+    // ---------------------------------------------------------------- selection & editing
+
+    private void Select(Guid? id)
+    {
+        _selectedId = id;
+        _selectedColumnId = null;
+    }
+
+    private void SelectColumn(ColumnsBlock row, EmailColumn column)
+    {
+        _selectedId = row.Id;
+        _selectedColumnId = column.Id;
+    }
+
+    /// <summary>Adds a block from the palette next to the current selection.</summary>
+    private Task AddBlock(EmailBlock block)
+    {
+        var loc = SelectedLocation;
+
+        // A column is selected → append into it.
+        if (block is not ColumnsBlock && Doc.FindColumn(_selectedColumnId) is { } target)
+        {
+            block.FitForColumn();
+            return InsertAt(block, target.Column.Id, target.Column.Blocks.Count);
+        }
+
+        // A block inside a column is selected → insert after it, in that column.
+        if (block is not ColumnsBlock && loc is { Column: { } col })
+        {
+            block.FitForColumn();
+            return InsertAt(block, col.Id, loc.Value.Index + 1);
+        }
+
+        // Otherwise top level: after the selected block (or its row), or at the end.
+        var rootIndex = loc is { Row: { } r } ? Doc.Blocks.IndexOf(r) : loc?.Index;
+        return InsertAt(block, null, rootIndex is { } i ? i + 1 : Doc.Blocks.Count);
+    }
+
+    private Task InsertAt(EmailBlock block, Guid? columnId, int index)
+    {
+        // Columns can't be nested: redirect to the top level, just before the row.
+        if (block is ColumnsBlock && columnId is not null)
+        {
+            index = Doc.Blocks.IndexOf(Doc.FindColumn(columnId)!.Value.Row);
+            columnId = null;
+        }
+
+        var list = Doc.ListFor(columnId);
+        if (list is null) return Task.CompletedTask;
+
+        list.Insert(Math.Clamp(index, 0, list.Count), block);
+        _selectedId = block.Id;
+        _selectedColumnId = null;
+        return Commit(coalesce: false);
+    }
+
+    private Task Move(Guid id, int delta)
+    {
+        if (Doc.Find(id) is not { } loc) return Task.CompletedTask;
+        var target = loc.Index + delta;
+        if (target < 0 || target >= loc.List.Count) return Task.CompletedTask;
+        (loc.List[loc.Index], loc.List[target]) = (loc.List[target], loc.List[loc.Index]);
+        return Commit(coalesce: false);
+    }
+
+    private Task Duplicate(Guid id)
+    {
+        if (Doc.Find(id) is not { } loc) return Task.CompletedTask;
+        var copy = loc.Block.Clone();
+        loc.List.Insert(loc.Index + 1, copy);
+        Select(copy.Id);
+        return Commit(coalesce: false);
+    }
+
+    private Task Delete(Guid id)
+    {
+        if (Doc.Find(id) is not { } loc) return Task.CompletedTask;
+        loc.List.RemoveAt(loc.Index);
+        if (SelectedLocation is null) Select(null);
+        if (_selectedColumnId is not null && Doc.FindColumn(_selectedColumnId) is null) _selectedColumnId = null;
+        return Commit(coalesce: false);
+    }
+
+    [JSInvokable]
+    public async Task DeleteSelected()
+    {
+        if (_selectedId is { } id)
+        {
+            await Delete(id);
+            StateHasChanged();
+        }
+    }
+
+    // ---------------------------------------------------------------- drag & drop
+
+    private bool IsDropTarget(Guid? columnId, int index) =>
+        _dragOver is { } t && t.ColumnId == columnId && t.Index == index;
+
+    private void StartDragNew(Func<EmailBlock> factory)
+    {
+        _dragging = true;
+        _draggingNew = factory;
+        _draggingId = null;
+        _draggingIsRow = factory() is ColumnsBlock;
+    }
+
+    private void StartDragExisting(EmailBlock block)
+    {
+        _dragging = true;
+        _draggingId = block.Id;
+        _draggingNew = null;
+        _draggingIsRow = block is ColumnsBlock;
+    }
+
+    /// <summary>A row being dragged over a column is treated as "drop before that row".</summary>
+    private DropTarget Normalize(Guid? columnId, int index) =>
+        _draggingIsRow && Doc.FindColumn(columnId) is { } c
+            ? new DropTarget(null, Doc.Blocks.IndexOf(c.Row))
+            : new DropTarget(columnId, index);
+
+    private void DragOver(Guid? columnId, int index)
+    {
+        if (!_dragging) return;
+        var target = Normalize(columnId, index);
+        if (_dragOver != target) _dragOver = target;
+    }
+
+    private void EndDrag()
+    {
+        _dragging = false;
+        _draggingIsRow = false;
+        _draggingId = null;
+        _draggingNew = null;
+        _dragOver = null;
+    }
+
+    private async Task Drop(Guid? columnId, int index)
+    {
+        var (targetColumn, targetIndex) = Normalize(columnId, index);
+
+        if (_draggingNew is { } factory)
+        {
+            var block = factory();
+            if (targetColumn is not null) block.FitForColumn();
+            await InsertAt(block, targetColumn, targetIndex);
+        }
+        else if (Doc.Find(_draggingId) is { } from && Doc.ListFor(targetColumn) is { } list)
+        {
+            var block = from.Block;
+            from.List.RemoveAt(from.Index);
+            if (ReferenceEquals(from.List, list) && from.Index < targetIndex) targetIndex--;
+            list.Insert(Math.Clamp(targetIndex, 0, list.Count), block);
+            Select(block.Id);
+            await Commit(coalesce: false);
+        }
+        EndDrag();
+    }
+
+    // ---------------------------------------------------------------- history & autosave
+
+    private Task Commit() => Commit(coalesce: true);
+
+    private async Task Commit(bool coalesce)
+    {
+        PushHistory(coalesce);
+        await SaveLocalAsync();
+    }
+
+    private void PushHistory(bool coalesce)
+    {
+        var json = JsonSerializer.Serialize(Doc, EmailExporter.JsonOptions);
+        if (_historyIndex >= 0 && _history[_historyIndex] == json) return;
+
+        // Drop any redo states.
+        if (_historyIndex < _history.Count - 1)
+            _history.RemoveRange(_historyIndex + 1, _history.Count - _historyIndex - 1);
+
+        // Typing produces an event per keystroke; merge quick successive edits into one undo step.
+        var now = DateTime.UtcNow;
+        // Only merge consecutive property edits on the same selection; structural changes always get their own step.
+        var key = coalesce ? $"{_selectedId}:{_selectedColumnId}" : null;
+        if (key is not null && key == _lastCoalesceKey && _historyIndex > 0 && now - _lastCommit < TimeSpan.FromMilliseconds(800))
+            _history[_historyIndex] = json;
+        else
+        {
+            _history.Add(json);
+            if (_history.Count > 100) _history.RemoveAt(0);
+            _historyIndex = _history.Count - 1;
+        }
+        _lastCommit = now;
+        _lastCoalesceKey = key;
+    }
+
+    [JSInvokable]
+    public async Task Undo()
+    {
+        if (!CanUndo) return;
+        _historyIndex--;
+        await RestoreHistory();
+    }
+
+    [JSInvokable]
+    public async Task Redo()
+    {
+        if (!CanRedo) return;
+        _historyIndex++;
+        await RestoreHistory();
+    }
+
+    private async Task RestoreHistory()
+    {
+        Doc = JsonSerializer.Deserialize<EmailDocument>(_history[_historyIndex], EmailExporter.JsonOptions)!;
+        if (SelectedLocation is null) _selectedId = null;
+        if (Doc.FindColumn(_selectedColumnId) is null) _selectedColumnId = null;
+        _lastCommit = DateTime.MinValue;
+        _lastCoalesceKey = null;
+        await SaveLocalAsync();
+        StateHasChanged();
+    }
+
+    private async Task SaveLocalAsync()
+    {
+        if (!_loaded) return;
+        try
+        {
+            await LocalStore.SetAsync(StorageKey, JsonSerializer.Serialize(Doc, EmailExporter.JsonOptions));
+        }
+        catch
+        {
+            // Autosave is best-effort.
+        }
+    }
+
+    // ---------------------------------------------------------------- documents
+
+    private async Task NewDocument()
+    {
+        Doc = new EmailDocument();
+        Select(null);
+        await Commit(coalesce: false);
+    }
+
+    private async Task LoadSample()
+    {
+        Doc = EmailDocument.CreateSample();
+        Select(null);
+        await Commit(coalesce: false);
+    }
+
+    private async Task SaveDesign()
+    {
+        var bytes = EmailExporter.SerializeDesign(Doc);
+        await DownloadAsync($"{EmailExporter.SafeFileName(Doc.Title)}.email.json", "application/json", bytes);
+    }
+
+    private async Task LoadDesign(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            await using var stream = e.File.OpenReadStream(5 * 1024 * 1024);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            ms.Position = 0;
+            Doc = EmailExporter.DeserializeDesign(ms);
+            Select(null);
+            await Commit(coalesce: false);
+            ShowToast($"Opened “{Doc.Title}”.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Couldn't open that file: {ex.Message}", error: true);
+        }
+    }
+
+    // ---------------------------------------------------------------- preview & export
+
+    private async Task OpenPreview()
+    {
+        _previewHtml = (await Renderer.RenderDocumentAsync(Doc, ImageMode.Preview)).Html;
+        _showPreview = true;
+    }
+
+    private async Task Export()
+    {
+        _exporting = true;
+        try
+        {
+            var name = EmailExporter.SafeFileName(Doc.Title);
+            if (_exportMode == ImageMode.Zip)
+                await DownloadAsync($"{name}.zip", "application/zip", await Exporter.ExportZipAsync(Doc));
+            else
+                await DownloadAsync($"{name}.html", "text/html", await Exporter.ExportHtmlAsync(Doc, _exportMode, _baseUrl));
+            _showExport = false;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export failed: {ex.Message}", error: true);
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private async Task CopyHtml()
+    {
+        try
+        {
+            var html = (await Renderer.RenderDocumentAsync(Doc, _exportMode, _baseUrl)).Html;
+            await _module!.InvokeVoidAsync("copyText", html);
+            ShowToast("HTML copied to clipboard.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Couldn't copy: {ex.Message}", error: true);
+        }
+    }
+
+    private async Task DownloadAsync(string fileName, string contentType, byte[] bytes)
+    {
+        using var streamRef = new DotNetStreamReference(new MemoryStream(bytes));
+        await _module!.InvokeVoidAsync("downloadFromStream", fileName, contentType, streamRef);
+    }
+
+    private async void ShowToast(string message, bool error = false)
+    {
+        _toastCts?.Cancel();
+        var cts = _toastCts = new CancellationTokenSource();
+        _toast = message;
+        _toastIsError = error;
+        StateHasChanged();
+        try
+        {
+            await Task.Delay(error ? 6000 : 3000, cts.Token);
+            _toast = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _toastCts?.Cancel();
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("unregisterShortcuts");
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException) { }
+        }
+        _selfRef?.Dispose();
+    }
+}
